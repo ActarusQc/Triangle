@@ -1,7 +1,6 @@
 <?php
 
 
-
 add_action('woocommerce_before_add_to_cart_button', 'ajouter_options_repas_au_formulaire');
 
 function ajouter_options_repas_au_formulaire() {
@@ -26,27 +25,50 @@ add_action('wp_footer', 'script_ajustement_prix');
 
 function script_ajustement_prix() {
     if (!is_product()) return;
+    
+    
+    ?>
+    <script>
+    function script_ajustement_prix() {
+    if (!is_product()) return;
+    
+    // Récupérer les prix depuis les options
+    $prix_repas_complet = get_option('prix_repas_complet', '7');
+    $prix_assiette_seulement = get_option('prix_assiette_seulement', '5');
     ?>
     <script>
     jQuery(document).ready(function($) {
+        var prixRepasComplet = <?php echo json_encode(floatval($prix_repas_complet)); ?>;
+        var prixAssietteSeulement = <?php echo json_encode(floatval($prix_assiette_seulement)); ?>;
+
         $('#option_repas').on('change', function() {
             var option = $(this).val();
             var price = 0;
             
             switch(option) {
                 case 'repas_complet':
-                    price = 7;
+                    price = prixRepasComplet;
                     break;
                 case 'assiette_uniquement':
-                    price = 5;
+                    price = prixAssietteSeulement;
                     break;
                 case 'carte_repas':
-                    price = 1;
+                    // Gérer le cas de la carte repas si nécessaire
+                    // Vous pouvez ajouter une logique spécifique ici si besoin
                     break;
             }
             
             $('.price .amount').text('$' + price.toFixed(2));
+
+            // Mettre à jour le prix du formulaire d'ajout au panier si nécessaire
+            $('input[name="variation_id"]').val(option);
+            $('input[name="product_id"]').val($('input[name="product_id"]').val());
+            $('input[name="add-to-cart"]').val($('input[name="product_id"]').val());
         });
+    });
+    </script>
+    <?php
+}
     });
     </script>
     <?php
@@ -112,12 +134,12 @@ add_filter('woocommerce_product_get_regular_price', 'definir_prix_par_defaut', 1
 
 function definir_prix_par_defaut($price, $product) {
     if ('' === $price || 0 === $price) {
-        return 7; // Prix par défaut pour 'repas_complet'
+        return floatval(get_option('prix_repas_complet', '7')); // Prix par défaut pour 'repas_complet'
     }
     return $price;
 }
 
-
+add_filter('woocommerce_add_to_cart_validation', 'valider_option_repas', 10, 3);
 
 add_filter('woocommerce_add_to_cart_validation', 'valider_option_repas', 10, 3);
 
@@ -138,34 +160,6 @@ function ajouter_option_repas_aux_donnees_panier($cart_item_data, $product_id, $
     return $cart_item_data;
 }
 
-
-
-
-
-add_action('woocommerce_before_calculate_totals', 'ajuster_prix_panier');
-
-function ajuster_prix_panier($cart) {
-    if (is_admin() && !defined('DOING_AJAX')) return;
-
-    foreach ($cart->get_cart() as $cart_item) {
-        if (isset($cart_item['option_repas'])) {
-            $price = 0;
-            switch ($cart_item['option_repas']) {
-                case 'repas_complet':
-                    $price = 7;
-                    break;
-                case 'assiette_uniquement':
-                    $price = 5;
-                    break;
-                case 'carte_repas':
-                    $price = 1;
-                    break;
-            }
-            $cart_item['data']->set_price($price);
-        }
-    }
-}
-
 add_filter('woocommerce_get_item_data', 'afficher_option_repas_dans_panier', 10, 2);
 
 function afficher_option_repas_dans_panier($item_data, $cart_item) {
@@ -176,4 +170,37 @@ function afficher_option_repas_dans_panier($item_data, $cart_item) {
         );
     }
     return $item_data;
+}
+
+add_action('woocommerce_before_calculate_totals', 'ajuster_prix_panier', 10, 1);
+
+function ajuster_prix_panier($cart) {
+    if (is_admin() && !defined('DOING_AJAX')) return;
+
+    // Récupérer les prix depuis les options
+    $prix_repas_complet = floatval(get_option('prix_repas_complet', '7'));
+    $prix_assiette_seulement = floatval(get_option('prix_assiette_seulement', '5'));
+
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product = $cart_item['data'];
+        if ($product->is_type('variation')) {
+            $variation_id = $cart_item['variation_id'];
+            $variation = wc_get_product($variation_id);
+            
+            if ($variation) {
+                $attributes = $variation->get_attributes();
+                if (isset($attributes['pa_type-de-repas'])) {
+                    switch ($attributes['pa_type-de-repas']) {
+                        case 'repas-complet':
+                            $product->set_price($prix_repas_complet);
+                            break;
+                        case 'assiette-seulement':
+                            $product->set_price($prix_assiette_seulement);
+                            break;
+                        // Vous pouvez ajouter d'autres cas ici si nécessaire
+                    }
+                }
+            }
+        }
+    }
 }

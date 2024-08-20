@@ -12,18 +12,73 @@ require_once get_stylesheet_directory() . '/includes/menu-custom.php';
 require_once get_stylesheet_directory() . '/includes/gestion-panier.php';
 
 
-add_action('woocommerce_add_to_cart', 'debug_add_to_cart', 10, 6);
-function debug_add_to_cart($cart_item_key, $product_id, $quantity, $variation_id, $variation, $cart_item_data) {
-    error_log("Product added to cart - ID: $product_id, Variation ID: $variation_id");
-    error_log("Cart Item Data: " . print_r($cart_item_data, true));
+function set_fixed_prices_for_menu_products($price, $product) {
+    // Vérifiez si le produit appartient à la catégorie "menu"
+    if (has_term('menu', 'product_cat', $product->get_id())) {
+        // Vérifiez si c'est un produit variable
+        if ($product->is_type('variation')) {
+            $variation_attributes = $product->get_variation_attributes();
+            // Vérifiez l'attribut 'pa_type-de-repas' (assurez-vous que c'est le bon slug)
+            if (isset($variation_attributes['attribute_pa_type-de-repas'])) {
+                switch ($variation_attributes['attribute_pa_type-de-repas']) {
+                    case 'repas-complet':
+                        return 8.00;
+                    case 'assiette-seulement':
+                        return 6.00;
+                }
+            }
+        }
+    }
+    return $price;
 }
+add_filter('woocommerce_product_variation_get_price', 'set_fixed_prices_for_menu_products', 10, 2);
+add_filter('woocommerce_product_variation_get_regular_price', 'set_fixed_prices_for_menu_products', 10, 2);
 
-add_filter('woocommerce_add_cart_item_data', 'debug_cart_item_data', 10, 3);
-function debug_cart_item_data($cart_item_data, $product_id, $variation_id) {
-    error_log("Cart Item Data before modification - Product ID: $product_id, Variation ID: $variation_id");
-    error_log(print_r($cart_item_data, true));
-    return $cart_item_data;
+
+
+function apply_fixed_prices_to_cart($cart) {
+    if (is_admin() && !defined('DOING_AJAX')) return;
+
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product = $cart_item['data'];
+        if (has_term('menu', 'product_cat', $product->get_parent_id())) {
+            $variation_attributes = $product->get_variation_attributes();
+            if (isset($variation_attributes['attribute_pa_type-de-repas'])) {
+                switch ($variation_attributes['attribute_pa_type-de-repas']) {
+                    case 'repas-complet':
+                        $cart_item['data']->set_price(8.00);
+                        break;
+                    case 'assiette-seulement':
+                        $cart_item['data']->set_price(6.00);
+                        break;
+                }
+            }
+        }
+    }
 }
+add_action('woocommerce_before_calculate_totals', 'apply_fixed_prices_to_cart', 10, 1);
+
+
+function display_fixed_prices_on_product_page($price, $product) {
+    if (has_term('menu', 'product_cat', $product->get_id()) && $product->is_type('variable')) {
+        $variation_prices = $product->get_variation_prices(true);
+        if (!empty($variation_prices['price'])) {
+            $min_price = min($variation_prices['price']);
+            $max_price = max($variation_prices['price']);
+            if ($min_price !== $max_price) {
+                return wc_price($min_price) . ' - ' . wc_price($max_price);
+            } else {
+                return wc_price($min_price);
+            }
+        }
+    }
+    return $price;
+}
+add_filter('woocommerce_variable_price_html', 'display_fixed_prices_on_product_page', 10, 2);
+
+
+
+
 
 
 add_action('woocommerce_before_calculate_totals', 'debug_price_hooks', 1);
@@ -36,15 +91,13 @@ function debug_price_hooks() {
                 if (is_array($callback['function'])) {
                     if (is_object($callback['function'][0])) {
                         $callback_name = get_class($callback['function'][0]) . '->' . $callback['function'][1];
-                    } elseif (is_string($callback['function'][0])) {
+                    } else {
                         $callback_name = $callback['function'][0] . '::' . $callback['function'][1];
                     }
                 } elseif (is_string($callback['function'])) {
                     $callback_name = $callback['function'];
-                } elseif (is_object($callback['function']) && ($callback['function'] instanceof Closure)) {
-                    $callback_name = 'Closure';
                 } else {
-                    $callback_name = 'Unknown';
+                    $callback_name = 'Closure';
                 }
                 error_log("Hook: woocommerce_before_calculate_totals, Priority: $priority, Function: " . $callback_name);
             }
@@ -53,17 +106,27 @@ function debug_price_hooks() {
 }
 
 
-function debug_cart_item_prices($cart_contents) {
-    foreach ($cart_contents as $cart_item_key => $cart_item) {
-        if (isset($cart_item['data']) && is_object($cart_item['data'])) {
-            $product = $cart_item['data'];
-            $variation_id = isset($cart_item['variation_id']) ? $cart_item['variation_id'] : 0;
-            $product_id = isset($cart_item['product_id']) ? $cart_item['product_id'] : $product->get_id();
-            $price = $product->get_price();
-            
-            error_log("Cart Item Debug - Product ID: {$product_id}, Variation ID: {$variation_id}, Price: {$price}");
+function debug_cart_item_prices($cart) {
+    error_log("Début du débogage des prix du panier");
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product = $cart_item['data'];
+        $variation_id = isset($cart_item['variation_id']) ? $cart_item['variation_id'] : 0;
+        
+        if ($variation_id) {
+            $variation = wc_get_product($variation_id);
+            $type_repas = $variation->get_attribute('pa_type-de-repas');
+        } else {
+            $type_repas = $product->get_attribute('pa_type-de-repas');
         }
+        
+        $price = $product->get_price();
+        $regular_price = $product->get_regular_price();
+        $sale_price = $product->get_sale_price();
+        
+        error_log("Produit ID: {$product->get_id()}, Variation ID: $variation_id, Type: $type_repas");
+        error_log("Prix actuel: $price, Prix régulier: $regular_price, Prix promo: $sale_price");
     }
+    error_log("Fin du débogage des prix du panier");
 }
 add_action('woocommerce_before_calculate_totals', 'debug_cart_item_prices', 20);
 
@@ -464,7 +527,18 @@ add_action('wp_ajax_nopriv_custom_add_to_cart', 'custom_add_to_cart');
 
 
 // Fonction de débogage pour l'ajout au panier
-
+function debug_add_to_cart($cart_item_data, $product_id, $variation_id) {
+    error_log("Debug - Adding to cart: Product ID: $product_id, Variation ID: $variation_id");
+    error_log("Debug - Cart item data: " . print_r($cart_item_data, true));
+    
+    // Vérifier le prix du produit
+    $product = wc_get_product($product_id);
+    $price = $product->get_price();
+    error_log("Debug - Product price: $price");
+    
+    return $cart_item_data;
+}
+add_filter('woocommerce_add_cart_item_data', 'debug_add_to_cart', 10, 3);
 
 // Fonction pour modifier l'affichage dans le mini-cart
 function custom_mini_cart_item($item_name, $cart_item) {
@@ -514,90 +588,21 @@ add_action('woocommerce_before_calculate_totals', 'modify_cart_item_price', 9999
 
 
 
-
-
-function check_and_fix_product_price($product_id, $variation_id, $type_repas) {
-    $prix_repas_complet = get_option('prix_repas_complet', 7);
-    $prix_assiette_seulement = get_option('prix_assiette_seulement', 5);
-    
-    error_log("Check and fix price - Product ID: $product_id, Variation ID: $variation_id, Type repas: $type_repas, Repas complet: $prix_repas_complet, Assiette seulement: $prix_assiette_seulement");
-
-    if ($type_repas === 'assiette-seulement') {
-        return $prix_assiette_seulement;
-    } elseif ($type_repas === 'repas-complet') {
-        return $prix_repas_complet;
-    }
-
-    error_log("Type de repas non reconnu ou non défini, prix par défaut appliqué");
-    return $prix_repas_complet; // ou return false; si vous préférez ne pas changer le prix dans ce cas
+function debug_cart_item_data($cart_item_data, $product_id, $variation_id) {
+    error_log("Debug - Cart Item Data avant ajout au panier: " . print_r($cart_item_data, true));
+    return $cart_item_data;
 }
+add_filter('woocommerce_add_cart_item_data', 'debug_cart_item_data', 10, 3);
 
-function apply_custom_prices_after_orderable($cart) {
-    if (is_admin() && !defined('DOING_AJAX')) return;
-
-    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
-        $product_id = $cart_item['product_id'];
-        $variation_id = $cart_item['variation_id'];
-        $type_repas = isset($cart_item['type_repas']) ? $cart_item['type_repas'] : 'Non défini';
-        
-        error_log("Applying custom price - Product ID: $product_id, Variation ID: $variation_id, Type repas: $type_repas");
-        
-        $price = check_and_fix_product_price($product_id, $variation_id, $type_repas);
-        
-        if ($price !== false) {
-            $cart_item['data']->set_price($price);
-            error_log("Price set for cart item: $price");
-        } else {
-            error_log("No price change for cart item");
-        }
-    }
-}
-
-add_filter('woocommerce_before_calculate_totals', 'apply_custom_prices_after_orderable', 9999, 1);
-
-function verify_final_prices($cart) {
-    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
-        $product = $cart_item['data'];
-        $price = $product->get_price();
-        $type_repas = $product->get_attribute('pa_type-de-repas');
-        error_log("Final check - Product: {$product->get_name()}, Type: $type_repas, Final Price: $price");
-    }
-}
-
+// Fonction pour ajouter au panier
 function custom_add_to_cart() {
-    error_log("custom_add_to_cart called with data: " . print_r($_POST, true));
-
     $product_id = isset($_POST['product_id']) ? intval($_POST['product_id']) : 0;
     $variation_id = isset($_POST['variation_id']) ? intval($_POST['variation_id']) : 0;
     $child_name = isset($_POST['child_name']) ? sanitize_text_field($_POST['child_name']) : '';
     $type_repas = isset($_POST['type_repas']) ? sanitize_text_field($_POST['type_repas']) : '';
 
-    if (!$product_id || empty($child_name) || empty($type_repas)) {
-        error_log("Invalid data received in custom_add_to_cart");
+    if (!$product_id || empty($child_name)) {
         wp_send_json_error('Données invalides');
-        return;
-    }
-
-    $product = wc_get_product($product_id);
-    if (!$product) {
-        error_log("Product not found for ID: $product_id");
-        wp_send_json_error('Produit non trouvé');
-        return;
-    }
-
-    if ($product->is_type('variable') && !$variation_id) {
-        $variations = $product->get_available_variations();
-        foreach ($variations as $variation) {
-            if ($variation['attributes']['attribute_pa_type-de-repas'] === $type_repas) {
-                $variation_id = $variation['variation_id'];
-                break;
-            }
-        }
-    }
-
-    if (!$variation_id) {
-        error_log("Variation not found for type_repas: $type_repas");
-        wp_send_json_error('Variation non trouvée');
         return;
     }
 
@@ -613,78 +618,24 @@ function custom_add_to_cart() {
         'type_repas' => $type_repas
     );
 
-    error_log("Attempting to add to cart - Product ID: $product_id, Variation ID: $variation_id, Child: $child_name, Type repas: $type_repas, Is free meal: " . ($is_free_meal ? 'Yes' : 'No'));
+    error_log("Debug - Adding to cart: Product ID: $product_id, Variation ID: $variation_id, Child: $child_name, Type repas: $type_repas, Is free meal: " . ($is_free_meal ? 'Yes' : 'No'));
 
-    $cart_item_key = WC()->cart->add_to_cart($product_id, 1, $variation_id, array('pa_type-de-repas' => $type_repas), $cart_item_data);
+    $cart_item_key = WC()->cart->add_to_cart($product_id, 1, $variation_id, array(), $cart_item_data);
 
     if ($cart_item_key) {
-        $price = check_and_fix_product_price($product_id, $variation_id);
-        if ($price !== false) {
-            WC()->cart->cart_contents[$cart_item_key]['data']->set_price($price);
-            error_log("Price set for cart item: $price");
-        }
         if ($is_free_meal) {
             WC()->cart->cart_contents[$cart_item_key]['data']->set_price(0);
-            error_log("Free meal, price set to 0");
         }
         if ($free_meals > 0 && !$fondation_member) {
             update_user_meta($user_id, 'points_repas_' . sanitize_key($child_name), $free_meals - 1);
-            error_log("Updated free meals for user");
         }
         wp_send_json_success('Produit ajouté au panier.');
     } else {
-        error_log("Failed to add product to cart");
         wp_send_json_error('Erreur lors de l\'ajout au panier');
     }
 }
-
-// Ajoutez ces lignes à la fin de votre fichier functions.php
-
-add_action('woocommerce_before_calculate_totals', 'verify_final_prices', 9999);
 add_action('wp_ajax_custom_add_to_cart', 'custom_add_to_cart');
 add_action('wp_ajax_nopriv_custom_add_to_cart', 'custom_add_to_cart');
-
-
-add_action('init', function() {
-    error_log('Prix repas complet: ' . get_option('prix_repas_complet'));
-    error_log('Prix assiette seulement: ' . get_option('prix_assiette_seulement'));
-});
-
-
-
-
-
-
-
-
-function modify_product_price_in_cart($cart) {
-    if (is_admin() && !defined('DOING_AJAX')) return;
-
-    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
-        $product = $cart_item['data'];
-        if ($product->is_type('variation')) {
-            $attributes = $product->get_attributes();
-            if (isset($attributes['pa_type-de-repas'])) {
-                $type_repas = $attributes['pa_type-de-repas'];
-                if ($type_repas === 'repas-complet') {
-                    $price = get_option('prix_repas_complet');
-                } elseif ($type_repas === 'assiette-seulement') {
-                    $price = get_option('prix_assiette_seulement');
-                } else {
-                    $price = $product->get_price(); // Prix par défaut si le type n'est pas reconnu
-                }
-                $product->set_price($price);
-            }
-        }
-    }
-}
-add_action('woocommerce_before_calculate_totals', 'modify_product_price_in_cart', 10, 1);
-
-
-
-
-
-
 
 
 function custom_cart_item_price_html($price_html, $cart_item, $cart_item_key) {
@@ -786,13 +737,59 @@ function custom_mini_cart_item_price($price_html, $cart_item, $cart_item_key) {
 add_filter('woocommerce_cart_item_price', 'custom_mini_cart_item_price', 9999, 3);
 
 
+function modify_product_price_in_cart($cart) {
+    if (is_admin() && !defined('DOING_AJAX')) return;
 
-add_action('wp_ajax_orderable_add_to_cart', 'orderable_add_to_cart');
-add_action('wp_ajax_nopriv_orderable_add_to_cart', 'orderable_add_to_cart');
+    $prix_repas_complet = floatval(get_option('prix_repas_complet', 12));
+    $prix_assiette_seulement = floatval(get_option('prix_assiette_seulement', 66));
+
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product = $cart_item['data'];
+        $type_repas = '';
+
+        if ($product->is_type('variation')) {
+            $variation_attributes = $product->get_variation_attributes();
+            $type_repas = isset($variation_attributes['attribute_repas']) ? $variation_attributes['attribute_repas'] : '';
+        } else {
+            $type_repas = $product->get_attribute('repas');
+        }
+
+        // Si le type de repas n'est toujours pas défini, essayez de le récupérer des données du panier
+        if (empty($type_repas) && isset($cart_item['variation']['attribute_repas'])) {
+            $type_repas = $cart_item['variation']['attribute_repas'];
+        }
+
+        error_log("Debug - Cart item: Key: $cart_item_key, Type repas: $type_repas");
+
+        $original_price = $product->get_price();
+        error_log("Avant modification - Produit ID: {$product->get_id()}, Type: $type_repas, Prix original: $original_price");
+
+        if (strpos(strtolower($type_repas), 'complet') !== false) {
+            $new_price = $prix_repas_complet;
+        } elseif (strpos(strtolower($type_repas), 'assiette') !== false) {
+            $new_price = $prix_assiette_seulement;
+        } else {
+            $new_price = $prix_repas_complet; // Prix par défaut si le type n'est pas reconnu
+            error_log("Type de repas non reconnu: $type_repas");
+        }
+
+        $product->set_price($new_price);
+        error_log("Après modification - Nouveau prix appliqué: $new_price");
+    }
+}
+
 
 add_action('woocommerce_before_calculate_totals', 'modify_product_price_in_cart', 10, 1);
-
-
+function debug_cart_contents($cart) {
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product = $cart_item['data'];
+        $variation_id = isset($cart_item['variation_id']) ? $cart_item['variation_id'] : 0;
+        $type_repas = $variation_id ? wc_get_product($variation_id)->get_attribute('pa_type-de-repas') : $product->get_attribute('pa_type-de-repas');
+        $price = $product->get_price();
+        error_log("Cart Item Debug - Product ID: {$product->get_id()}, Variation ID: $variation_id, Type: $type_repas, Price: $price");
+    }
+}
+add_action('woocommerce_before_calculate_totals', 'debug_cart_contents', 30);
 
 
 function debug_cart_data() {
@@ -805,6 +802,40 @@ function debug_cart_data() {
     }
 }
 add_action('woocommerce_before_calculate_totals', 'debug_cart_data', 1);
+
+function check_and_fix_product_price($product_id) {
+    $product = wc_get_product($product_id);
+    if (!$product) {
+        return false;
+    }
+
+    $price = $product->get_price();
+    
+    if ($price == 0 || $price == '') {
+        // Définir un prix par défaut ou le récupérer d'une option
+        $default_price = get_option('default_product_price', 10); // 10 est le prix par défaut si l'option n'est pas définie
+        $product->set_price($default_price);
+        $product->save();
+        return $default_price;
+    }
+    
+    return $price;
+}
+
+
+function apply_custom_prices($cart) {
+    if (is_admin() && !defined('DOING_AJAX')) return;
+
+    foreach ($cart->get_cart() as $cart_item_key => $cart_item) {
+        $product_id = $cart_item['product_id'];
+        $price = check_and_fix_product_price($product_id);
+        
+        if ($price !== false) {
+            $cart_item['data']->set_price($price);
+        }
+    }
+}
+
 
 
 

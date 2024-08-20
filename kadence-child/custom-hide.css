@@ -1,0 +1,13 @@
+.orderable-product__actions-price .woocommerce-Price-amount,
+.orderable-product__actions-price .fp-srp-point-price,
+.orderable-product__actions-price .woocommerce-Price-amount + *,
+.hide-zero-amount .woocommerce-Price-amount,
+.hide-zero-amount .fp-srp-point-price,
+.hide-zero-amount::after {
+    display: none !important;
+}
+
+/* Réafficher les éléments si le prix n'est pas 0.00$ */
+.orderable-product__actions-price:not(.hide-zero-amount) .woocommerce-Price-amount {
+    display: inline !important;
+}
